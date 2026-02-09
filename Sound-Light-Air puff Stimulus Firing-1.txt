@@ -1,0 +1,349 @@
+clear all;
+close all;
+clc;
+
+%% 1. Read Excel Data
+filename = 'YourFileName.xlsx';  % Please modify to actual file name
+
+% Read data
+try
+    % Attempt to use xlsread (compatible with older versions)
+    [num_data, txt_data, raw_data] = xlsread(filename);
+    
+    % Extract data
+    if size(num_data, 2) >= 2
+        time_points = num_data(:, 1);  % First column: firing time points
+        neuron_numbers = num_data(:, 2); % Second column: neuron numbers
+    else
+        error('Insufficient number of data columns. Ensure Excel file has at least two columns.');
+    end
+    
+catch ME
+    % If xlsread fails, try alternative method
+    disp('xlsread failed. Trying alternative method...');
+    
+    % Method 2: Use importdata
+    data = importdata(filename);
+    if isstruct(data)
+        time_points = data.data(:, 1);
+        neuron_numbers = data.data(:, 2);
+    else
+        error('Unable to read Excel file. Please check filename and format.');
+    end
+end
+
+%% 2. Data Validation
+% Ensure data is within 0-10 second range
+valid_indices = (time_points >= 0 & time_points <= 10);
+time_points = time_points(valid_indices);
+neuron_numbers = neuron_numbers(valid_indices);
+
+% Determine neuron number range
+unique_neurons = unique(neuron_numbers);
+num_neurons = length(unique_neurons);
+
+disp(['Detected neurons: ' num2str(num_neurons)]);
+disp(['Neuron number range: ' num2str(min(unique_neurons)) ' to ' num2str(max(unique_neurons))]);
+
+if num_neurons < 29
+    warning(['Only ' num2str(num_neurons) ' neurons detected. Expected 29.']);
+end
+
+%% 3. Parameter Settings
+% Time window size (seconds)
+time_window = 0.1;  % 100ms window (adjustable as needed)
+
+% Stimulus time point
+stim_time = 2;  % Stimulus onset time (seconds)
+
+% Time range: 0-10 seconds
+min_time = 0;
+max_time = 10;
+total_time = max_time - min_time;
+
+% Calculate number of time bins
+num_time_bins = ceil(total_time / time_window);
+
+% Create time axis
+time_axis = linspace(min_time, max_time, num_time_bins);
+
+%% 4. Create 29-Row Firing Rate Matrix (one row per neuron)
+% Initialize matrix: rows = neurons, columns = time windows
+freq_matrix_29 = zeros(29, num_time_bins);
+
+% Calculate firing rate for each neuron
+for neuron = 1:29
+    % Get all firing time points for this neuron
+    neuron_indices = (neuron_numbers == neuron);
+    neuron_times = time_points(neuron_indices);
+    
+    if isempty(neuron_times)
+        disp(['Warning: Neuron ' num2str(neuron) ' has no firing data']);
+        continue;  % Skip if no data for this neuron
+    end
+    
+    % Count firing events in each time window
+    for bin_idx = 1:num_time_bins
+        % Calculate current time window start and end times
+        bin_start = time_axis(bin_idx);
+        bin_end = min(time_axis(bin_idx) + time_window, max_time);
+        
+        % Count firing events within this time window
+        spike_count = sum((neuron_times >= bin_start) & (neuron_times < bin_end));
+        
+        % Calculate firing rate (Hz, spikes per second)
+        freq_matrix_29(neuron, bin_idx) = spike_count / time_window;
+    end
+end
+
+%% 5. Smoothing Processing
+% Apply simple moving average smoothing
+smooth_kernel = [0.25, 0.5, 0.25];  % 3-point smoothing
+freq_matrix_29_smoothed = zeros(size(freq_matrix_29));
+
+for neuron = 1:29
+    % Smooth each row
+    freq_matrix_29_smoothed(neuron, :) = conv(freq_matrix_29(neuron, :), smooth_kernel, 'same');
+end
+
+%% 6. Sort According to Firing Rate at 2-Second Time Point
+% Find time window index corresponding to 2-second time point
+[~, stim_bin_idx] = min(abs(time_axis - stim_time));
+disp(['Time window index corresponding to 2-second time point: ' num2str(stim_bin_idx)]);
+disp(['Corresponding time: ' num2str(time_axis(stim_bin_idx)) ' seconds']);
+
+% Extract firing rate of each neuron at 2-second time point
+stim_freq_values = freq_matrix_29_smoothed(:, stim_bin_idx);
+
+% Display firing rates at 2-second time point before sorting
+disp('=== Firing Rates at 2-Second Time Point Before Sorting ===');
+for i = 1:29
+    disp(['Neuron ' num2str(i) ': ' num2str(stim_freq_values(i)) ' Hz']);
+end
+
+% Sort in descending order according to firing rate at 2-second time point (highest first)
+[sorted_stim_freq, sort_idx] = sort(stim_freq_values, 'descend');
+
+% Display sorted results
+disp('=== Firing Rates at 2-Second Time Point After Sorting ===');
+for i = 1:29
+    original_idx = sort_idx(i);
+    disp(['Rank ' num2str(i) ' (Original Neuron ' num2str(original_idx) '): ' num2str(sorted_stim_freq(i)) ' Hz']);
+end
+
+% Rearrange heatmap data according to sorting results
+freq_matrix_29_sorted = freq_matrix_29_smoothed(sort_idx, :);
+
+% Save sorting indices
+neuron_order_original = 1:29;
+neuron_order_sorted = sort_idx;
+neuron_order_mapping = [neuron_order_original', sort_idx, stim_freq_values, sorted_stim_freq];
+
+%% 7. Generate Plots
+% Figure 1: Comparison Before and After Sorting
+figure('Position', [50, 50, 1400, 800]);
+
+% Subplot 1: Heatmap Before Sorting
+subplot(2, 2, 1);
+imagesc(time_axis, 1:29, freq_matrix_29_smoothed);
+colormap('hot');
+colorbar;
+xlabel('Time (s)');
+ylabel('Neuron Number (Before Sorting)');
+title('Firing Rate Heatmap of 29 Neurons (Before Sorting)');
+set(gca, 'YTick', 1:29);
+grid on;
+% Mark 2-second time point
+hold on;
+plot([stim_time, stim_time], [0.5, 29.5], 'g--', 'LineWidth', 2);
+hold off;
+
+% Subplot 2: Heatmap After Sorting
+subplot(2, 2, 2);
+imagesc(time_axis, 1:29, freq_matrix_29_sorted);
+colormap('hot');
+colorbar;
+xlabel('Time (s)');
+ylabel('Neuron Number (After Sorting)');
+title('Firing Rate Heatmap of 29 Neurons (Sorted by Firing Rate at 2-Second Time Point)');
+set(gca, 'YTick', 1:29);
+set(gca, 'YTickLabel', arrayfun(@(x) sprintf('Orig %d', neuron_order_sorted(x)), 1:29, 'UniformOutput', false));
+grid on;
+% Mark 2-second time point
+hold on;
+plot([stim_time, stim_time], [0.5, 29.5], 'g--', 'LineWidth', 2);
+hold off;
+
+% Subplot 3: Bar Chart of 2-Second Firing Rates (Before Sorting)
+subplot(2, 2, 3);
+bar(1:29, stim_freq_values, 'b');
+xlabel('Neuron Number (Before Sorting)');
+ylabel('Firing Rate (Hz)');
+title(['2-Second Firing Rates (Before Sorting)']);
+grid on;
+
+% Subplot 4: Bar Chart of 2-Second Firing Rates (After Sorting)
+subplot(2, 2, 4);
+bar(1:29, sorted_stim_freq, 'r');
+xlabel('Rank');
+ylabel('Firing Rate (Hz)');
+title(['2-Second Firing Rates (After Sorting)']);
+grid on;
+
+%% 8. Generate Single Sorted Heatmap (Large Figure)
+figure('Position', [100, 100, 1400, 500]);
+
+imagesc(time_axis, 1:29, freq_matrix_29_sorted);
+colormap('hot');
+colorbar;
+
+% Add labels
+xlabel('Time (s)', 'FontSize', 12);
+ylabel('Neuron Rank (by 2-Second Firing Rate)', 'FontSize', 12);
+title(['Firing Rate Heatmap of 29 Neurons (Sorted by 2-Second Firing Rate, Highest Ranked First)'], 'FontSize', 14);
+
+% Set y-axis ticks
+set(gca, 'YTick', 1:29);
+set(gca, 'YTickLabel', arrayfun(@(x) sprintf('Rank %d', x), 1:29, 'UniformOutput', false));
+
+% Mark 2-second time point
+hold on;
+plot([stim_time, stim_time], [0.5, 29.5], 'g--', 'LineWidth', 2);
+text(stim_time+0.1, 28.5, 'Stimulus Onset', 'Color', 'g', 'FontSize', 12, 'FontWeight', 'bold');
+hold off;
+
+grid on;
+set(gca, 'GridColor', 'w', 'GridAlpha', 0.3);
+
+%% 9. Plot Comparison of 2-Second Firing Rates Before and After Sorting
+figure('Position', [150, 150, 1200, 400]);
+
+% Subplot 1: Scatter Plot Comparison Before and After Sorting
+subplot(1, 3, 1);
+plot(1:29, stim_freq_values, 'bo-', 'LineWidth', 1.5, 'MarkerSize', 6, 'MarkerFaceColor', 'b');
+hold on;
+plot(1:29, sorted_stim_freq, 'ro-', 'LineWidth', 1.5, 'MarkerSize', 6, 'MarkerFaceColor', 'r');
+xlabel('Neuron Number / Rank');
+ylabel('2-Second Firing Rate (Hz)');
+title('Comparison of 2-Second Firing Rates Before and After Sorting');
+legend('Before Sorting (Original Number)', 'After Sorting (by Firing Rate Rank)', 'Location', 'best');
+grid on;
+
+% Subplot 2: Curves of Top 10 Highest Firing Rate Neurons
+subplot(1, 3, 2);
+hold on;
+colors = jet(10);
+for i = 1:min(10, 29)
+    plot(time_axis, freq_matrix_29_sorted(i, :), 'Color', colors(i, :), 'LineWidth', 2);
+end
+xlabel('Time (s)');
+ylabel('Firing Rate (Hz)');
+title('Top 10 Highest Firing Rate Neurons');
+legend(arrayfun(@(x) sprintf('Rank %d (Orig %d)', x, neuron_order_sorted(x)), 1:10, 'UniformOutput', false), ...
+       'Location', 'best', 'FontSize', 8);
+grid on;
+% Mark 2-second time point
+plot([stim_time, stim_time], ylim, 'k--', 'LineWidth', 1.5);
+hold off;
+
+% Subplot 3: Curves of Bottom 10 Lowest Firing Rate Neurons
+subplot(1, 3, 3);
+hold on;
+colors = jet(10);
+for i = 20:29
+    rank_idx = i;  % Rank index
+    color_idx = i - 19;  % Color index
+    plot(time_axis, freq_matrix_29_sorted(rank_idx, :), 'Color', colors(color_idx, :), 'LineWidth', 2);
+end
+xlabel('Time (s)');
+ylabel('Firing Rate (Hz)');
+title('Bottom 10 Lowest Firing Rate Neurons');
+legend(arrayfun(@(x) sprintf('Rank %d (Orig %d)', x, neuron_order_sorted(x)), 20:29, 'UniformOutput', false), ...
+       'Location', 'best', 'FontSize', 8);
+grid on;
+% Mark 2-second time point
+plot([stim_time, stim_time], ylim, 'k--', 'LineWidth', 1.5);
+hold off;
+
+%% 10. Plot Sorting Mapping Relationship
+figure('Position', [200, 200, 800, 600]);
+
+subplot(2, 1, 1);
+% Plot sorting mapping relationship
+plot(neuron_order_original, neuron_order_sorted, 'bo-', 'LineWidth', 1.5, 'MarkerSize', 8, 'MarkerFaceColor', 'b');
+xlabel('Original Neuron Number');
+ylabel('Sorted Rank');
+title('Neuron Sorting Mapping Relationship');
+grid on;
+% Add diagonal line for reference
+hold on;
+plot([1, 29], [1, 29], 'r--', 'LineWidth', 1);
+hold off;
+
+subplot(2, 1, 2);
+% Plot firing rate distribution histogram
+histogram(stim_freq_values, 15, 'FaceColor', 'b', 'EdgeColor', 'k');
+xlabel('2-Second Firing Rate (Hz)');
+ylabel('Number of Neurons');
+title('2-Second Firing Rate Distribution');
+grid on;
+
+%% 11. Save Results
+% Save data to mat file
+save('sorted_neuron_frequency_data.mat', ...
+     'freq_matrix_29', 'freq_matrix_29_smoothed', ...
+     'freq_matrix_29_sorted', ...
+     'time_axis', 'time_window', 'stim_time', ...
+     'neuron_order_original', 'neuron_order_sorted', ...
+     'stim_freq_values', 'sorted_stim_freq', 'sort_idx');
+
+% Save sorting table to Excel
+sorting_table = cell(30, 5);
+sorting_table{1,1} = 'Rank';
+sorting_table{1,2} = 'Original Neuron Number';
+sorting_table{1,3} = '2-Second Firing Rate (Hz)';
+sorting_table{1,4} = 'Average Firing Rate (Hz)';
+sorting_table{1,5} = 'Maximum Firing Rate (Hz)';
+
+% Calculate average and maximum firing rate for each neuron
+neuron_mean_freq = mean(freq_matrix_29_smoothed, 2);
+neuron_max_freq = max(freq_matrix_29_smoothed, [], 2);
+
+for i = 1:29
+    original_idx = sort_idx(i);
+    sorting_table{i+1,1} = i;
+    sorting_table{i+1,2} = original_idx;
+    sorting_table{i+1,3} = sorted_stim_freq(i);
+    sorting_table{i+1,4} = neuron_mean_freq(original_idx);
+    sorting_table{i+1,5} = neuron_max_freq(original_idx);
+end
+
+% Write to Excel file
+xlswrite('neuron_sorting_table.xlsx', sorting_table);
+
+% Save figures
+print('sorted_neuron_heatmap_comparison.png', '-dpng', '-r300');
+print('sorted_neuron_heatmap_large.png', '-dpng', '-r300');
+print('neuron_frequency_curves_sorted.png', '-dpng', '-r300');
+print('neuron_sorting_mapping.png', '-dpng', '-r300');
+
+% Save as PDF
+print('sorted_neuron_heatmap_comparison.pdf', '-dpdf');
+print('sorted_neuron_heatmap_large.pdf', '-dpdf');
+
+%% 12. Output Statistical Information
+disp('=== Data Processing Complete ===');
+disp(['Time window size: ' num2str(time_window*1000) ' ms']);
+disp(['Stimulus time point: ' num2str(stim_time) ' seconds']);
+disp(['Maximum firing rate (before sorting): ' num2str(max(stim_freq_values)) ' Hz']);
+disp(['Minimum firing rate (before sorting): ' num2str(min(stim_freq_values)) ' Hz']);
+disp(['Average firing rate (all neurons, 2-second time point): ' num2str(mean(stim_freq_values)) ' Hz']);
+disp(['Median firing rate (all neurons, 2-second time point): ' num2str(median(stim_freq_values)) ' Hz']);
+
+% Display top three ranked neurons
+disp('=== Top Three Ranked Neurons ===');
+for i = 1:3
+    original_idx = sort_idx(i);
+    disp(['Rank ' num2str(i) ': Original Neuron ' num2str(original_idx) ...
+          ', 2-second firing rate: ' num2str(sorted_stim_freq(i)) ' Hz']);
+end
